@@ -50,6 +50,25 @@ Whenever a major architectural decision changes, this document should be updated
 
 # Project Structure
 
+Current implemented structure:
+
+```
+bolt/
+
+cmd/
+    bolt/
+
+internal/
+    server/
+    storage/
+
+docs/
+    PRD.md
+    SSOT.md
+```
+
+Expected long-term structure:
+
 ```
 bolt/
 
@@ -91,10 +110,19 @@ Responsible for:
 
 - TCP listener
 - Client connections
-- Request handling
-- Response writing
+- One goroutine per accepted client connection
+- Connection lifecycle logging
+- Graceful shutdown
 
 Must never manipulate storage directly.
+
+Stage 2 status:
+
+- The server accepts TCP connections.
+- The listen address is configurable.
+- Active client connections are closed during shutdown.
+- Incoming bytes are discarded until a protocol parser exists.
+- No command parsing, command dispatching, response writing, or storage integration exists yet.
 
 ---
 
@@ -261,6 +289,8 @@ All writes pass through the storage engine.
 Development:
 
 - Human-readable logs
+- Server startup
+- Client connect/disconnect events
 
 Future:
 

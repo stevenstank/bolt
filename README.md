@@ -6,29 +6,36 @@ The goal of this project is to learn how modern databases are built from first p
 
 ## Current Status
 
-Bolt is currently in **Phase 1 – Core In-Memory Database**.
+Bolt is currently in **Phase 2 – Networking**.
 
 Implemented so far:
 
 - Storage engine
 - SET
 - GET
+- TCP server
+- Configurable listen address
+- Concurrent client connections
+- Connection logging
+- Clean shutdown
 
 Coming next:
 
-- DEL
-- EXISTS
-- KEYS
-- Concurrency tests
+- Protocol parsing
+- Command dispatch
+- Storage integration over TCP
 
 ## Project Structure
 
 ```text
 bolt/
+├── cmd/
+│   └── bolt/
 ├── docs/
 │   ├── PRD.md
 │   └── SSOT.md
 ├── internal/
+│   ├── server/
 │   └── storage/
 ├── README.md
 └── go.mod
@@ -39,6 +46,37 @@ bolt/
 ```bash
 go build ./...
 ```
+
+## Run
+
+Start the Bolt server:
+
+```bash
+go run ./cmd/bolt -addr 127.0.0.1:6380
+```
+
+You should see:
+
+```text
+server listening on 127.0.0.1:6380
+```
+
+### Connect to the server
+
+Open a new terminal and connect using `netcat`:
+
+```bash
+nc 127.0.0.1 6380
+```
+
+If the connection succeeds, the terminal will wait for input and the server will log the new client connection.
+
+At the current stage, Bolt accepts TCP connections but does not yet process commands, so typing text into the client will not produce a response.
+
+To disconnect, press **Ctrl+C** or **Ctrl+D** in the client terminal.
+
+> **Note:** Bolt defaults to `127.0.0.1:6379`, which is also Redis's default port. If Redis is running on your machine, use another port such as `6380`.
+
 
 ## Test
 
