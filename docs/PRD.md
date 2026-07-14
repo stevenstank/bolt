@@ -150,6 +150,21 @@ Turn Bolt into a TCP server capable of serving multiple concurrent clients.
 
 Implement expiration, append-only persistence, snapshots, and crash recovery.
 
+Completed Stage 3 scope:
+
+- Append Only File (AOF) records for SET operations
+- AOF replay into the in-memory store on startup
+- AOF crash recovery for incomplete trailing records
+- Deterministic snapshot save/load primitives
+- Server configuration for AOF and snapshot file paths
+- Plain-text TCP command parsing for SET and GET
+- Command dispatch through the engine and storage layers
+- Manual TCP usage through Netcat
+
+Deferred beyond Stage 3:
+
+- Expiration support
+
 ---
 
 ## Phase 4 — Replication

@@ -1,25 +1,32 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"errors"
-	"io"
 	"log"
 	"net"
 	"os"
 	"sync"
 )
 
+// Processor handles one client command line.
+type Processor interface {
+	Process(line string) string
+}
+
 // Config contains TCP server configuration.
 type Config struct {
-	Addr   string
-	Logger *log.Logger
+	Addr      string
+	Logger    *log.Logger
+	Processor Processor
 }
 
 // Server owns Bolt's TCP listener and client connections.
 type Server struct {
-	addr   string
-	logger *log.Logger
+	addr      string
+	logger    *log.Logger
+	processor Processor
 
 	mu       sync.Mutex
 	listener net.Listener
@@ -42,10 +49,11 @@ func New(config Config) *Server {
 	}
 
 	return &Server{
-		addr:    addr,
-		logger:  logger,
-		clients: make(map[net.Conn]struct{}),
-		done:    make(chan struct{}),
+		addr:      addr,
+		logger:    logger,
+		processor: config.Processor,
+		clients:   make(map[net.Conn]struct{}),
+		done:      make(chan struct{}),
 	}
 }
 
@@ -164,5 +172,17 @@ func (s *Server) handleConnection(conn net.Conn) {
 	}()
 
 	s.logger.Printf("client connected: %s", conn.RemoteAddr().String())
-	_, _ = io.Copy(io.Discard, conn)
+	scanner := bufio.NewScanner(conn)
+	for scanner.Scan() {
+		response := "ERR server is not configured to process commands"
+		if s.processor != nil {
+			response = s.processor.Process(scanner.Text())
+		}
+		if _, err := conn.Write([]byte(response + "\n")); err != nil {
+			return
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		s.logger.Printf("client read error: %v", err)
+	}
 }

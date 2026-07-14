@@ -59,6 +59,10 @@ cmd/
     bolt/
 
 internal/
+    command/
+    engine/
+    persistence/
+    protocol/
     server/
     storage/
 
@@ -116,13 +120,16 @@ Responsible for:
 
 Must never manipulate storage directly.
 
-Stage 2 status:
+Current Stage 3 status:
 
 - The server accepts TCP connections.
 - The listen address is configurable.
 - Active client connections are closed during shutdown.
-- Incoming bytes are discarded until a protocol parser exists.
-- No command parsing, command dispatching, response writing, or storage integration exists yet.
+- Each client connection is handled by one goroutine.
+- The server continuously reads newline-delimited command lines.
+- The server delegates command processing through a `Processor` interface.
+- The server writes one newline-terminated response per command.
+- The server never manipulates storage directly.
 
 ---
 
@@ -134,9 +141,13 @@ Responsible for:
 - Encoding responses
 - Protocol validation
 
-Initially:
+Current:
 
-Plain text protocol
+- Plain text protocol.
+- One command per line.
+- Whitespace separates command name and arguments.
+- Command names are case-insensitive.
+- Supported commands are `SET <key> <value>` and `GET <key>`.
 
 Later:
 
@@ -150,7 +161,23 @@ Responsible for:
 
 - Command validation
 - Command routing
-- Calling the storage engine
+- Calling the engine
+- Plain-text response selection
+
+Current:
+
+- `SET` returns `OK`.
+- `GET` returns the stored value.
+- Missing `GET` returns `(nil)`.
+- Invalid commands return `ERR ...`.
+
+## Engine
+
+Responsible for:
+
+- Coordinating protocol parsing and command dispatch
+- Providing the server-facing command processor interface
+- Converting malformed input into error responses
 
 ---
 
@@ -166,6 +193,17 @@ Responsible for:
 
 Storage must never know about networking.
 
+Current Stage 3 status:
+
+- `NewStore` creates an in-memory-only store.
+- `NewPersistentStore` creates a store backed by an Append Only File.
+- `NewDurableStore` creates a store backed by AOF and snapshot files.
+- Durable startup loads the snapshot first and replays the AOF second.
+- `SaveSnapshot` writes a point-in-time copy of current data.
+- Persistent writes are appended before the in-memory map is updated.
+- Startup replay returns an error for complete corrupt AOF records.
+- Startup replay recovers from incomplete trailing AOF records by truncating the partial tail.
+
 ---
 
 ## Persistence
@@ -176,6 +214,14 @@ Responsible for:
 - Snapshot creation
 - Snapshot loading
 - Crash recovery
+
+Current Stage 3 status:
+
+- `internal/persistence` owns all on-disk record formatting and parsing.
+- The AOF records SET operations in a deterministic length-prefixed text format.
+- Snapshot files use the same SET record representation and write keys in sorted order.
+- Persistence has no dependency on networking or server lifecycle code.
+- Default files are `bolt.aof` and `bolt.snapshot`.
 
 ---
 
@@ -237,7 +283,15 @@ Dispatcher
 
 ↓
 
+Engine
+
+↓
+
 Storage Engine
+
+↓
+
+Persistence
 
 ↓
 

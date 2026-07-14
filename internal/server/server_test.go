@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"log"
@@ -125,6 +126,109 @@ func TestServerShutdownStopsAcceptingConnectionsAndClosesClients(t *testing.T) {
 	if _, err := conn.Read(make([]byte, 1)); err == nil {
 		t.Fatal("expected existing client connection to be closed")
 	}
+}
+
+func TestServerProcessesMultipleCommandsOnOneConnection(t *testing.T) {
+	processor := &recordingProcessor{
+		responses: []string{"OK", "saksham", "(nil)"},
+	}
+	srv := New(Config{
+		Addr:      "127.0.0.1:0",
+		Processor: processor,
+	})
+	t.Cleanup(func() {
+		_ = srv.Shutdown(context.Background())
+	})
+
+	if err := srv.Start(); err != nil {
+		t.Fatalf("start server: %v", err)
+	}
+
+	conn, err := net.DialTimeout("tcp", srv.Addr(), time.Second)
+	if err != nil {
+		t.Fatalf("dial server: %v", err)
+	}
+	defer conn.Close()
+
+	reader := bufio.NewReader(conn)
+	commands := []string{"SET name saksham\n", "GET name\n", "GET missing\n"}
+	wantResponses := []string{"OK\n", "saksham\n", "(nil)\n"}
+
+	for i, command := range commands {
+		if _, err := conn.Write([]byte(command)); err != nil {
+			t.Fatalf("write command: %v", err)
+		}
+		response, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read response: %v", err)
+		}
+		if response != wantResponses[i] {
+			t.Fatalf("expected response %q, got %q", wantResponses[i], response)
+		}
+	}
+
+	processor.mu.Lock()
+	defer processor.mu.Unlock()
+	if got := processor.commands; len(got) != 3 || got[0] != "SET name saksham" || got[1] != "GET name" || got[2] != "GET missing" {
+		t.Fatalf("expected processed commands, got %v", got)
+	}
+}
+
+func TestServerKeepsConnectionOpenAfterErrorResponse(t *testing.T) {
+	processor := &recordingProcessor{
+		responses: []string{"ERR unknown command \"DEL\"", "OK"},
+	}
+	srv := New(Config{
+		Addr:      "127.0.0.1:0",
+		Processor: processor,
+	})
+	t.Cleanup(func() {
+		_ = srv.Shutdown(context.Background())
+	})
+
+	if err := srv.Start(); err != nil {
+		t.Fatalf("start server: %v", err)
+	}
+
+	conn, err := net.DialTimeout("tcp", srv.Addr(), time.Second)
+	if err != nil {
+		t.Fatalf("dial server: %v", err)
+	}
+	defer conn.Close()
+
+	reader := bufio.NewReader(conn)
+	if _, err := conn.Write([]byte("DEL name\n")); err != nil {
+		t.Fatalf("write invalid command: %v", err)
+	}
+	if response, err := reader.ReadString('\n'); err != nil || response != "ERR unknown command \"DEL\"\n" {
+		t.Fatalf("expected error response, got %q, err=%v", response, err)
+	}
+
+	if _, err := conn.Write([]byte("SET name saksham\n")); err != nil {
+		t.Fatalf("write valid command: %v", err)
+	}
+	if response, err := reader.ReadString('\n'); err != nil || response != "OK\n" {
+		t.Fatalf("expected OK response after error, got %q, err=%v", response, err)
+	}
+}
+
+type recordingProcessor struct {
+	mu        sync.Mutex
+	responses []string
+	commands  []string
+}
+
+func (p *recordingProcessor) Process(line string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.commands = append(p.commands, line)
+	if len(p.responses) == 0 {
+		return "OK"
+	}
+	response := p.responses[0]
+	p.responses = p.responses[1:]
+	return response
 }
 
 func waitFor(t *testing.T, timeout time.Duration, condition func() bool) {

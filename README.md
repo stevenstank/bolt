@@ -6,7 +6,7 @@ The goal of this project is to learn how modern databases are built from first p
 
 ## Current Status
 
-Bolt is currently in **Phase 2 – Networking**.
+Bolt has completed **Stage 3 – Persistence**.
 
 Implemented so far:
 
@@ -18,12 +18,19 @@ Implemented so far:
 - Concurrent client connections
 - Connection logging
 - Clean shutdown
+- Plain-text command parsing
+- Command dispatch
+- Storage integration over TCP
+- Append Only File (AOF) persistence primitive
+- Persistent store recovery from AOF
+- Snapshot save/load primitives
+- AOF recovery from incomplete trailing writes
+- Configurable AOF and snapshot file paths
 
 Coming next:
 
-- Protocol parsing
-- Command dispatch
-- Storage integration over TCP
+- Expiration support
+- Replication
 
 ## Project Structure
 
@@ -33,8 +40,14 @@ bolt/
 │   └── bolt/
 ├── docs/
 │   ├── PRD.md
-│   └── SSOT.md
+│   ├── SSOT.md
+│   ├── ARCHITECTURE.md
+│   └── adr/
 ├── internal/
+│   ├── command/
+│   ├── engine/
+│   ├── persistence/
+│   ├── protocol/
 │   ├── server/
 │   └── storage/
 ├── README.md
@@ -61,6 +74,20 @@ You should see:
 server listening on 127.0.0.1:6380
 ```
 
+By default Bolt writes persistence files in the current working directory:
+
+- `bolt.aof`
+- `bolt.snapshot`
+
+You can override them:
+
+```bash
+go run ./cmd/bolt \
+  -addr 127.0.0.1:6380 \
+  -aof /tmp/bolt.aof \
+  -snapshot /tmp/bolt.snapshot
+```
+
 ### Connect to the server
 
 Open a new terminal and connect using `netcat`:
@@ -71,7 +98,23 @@ nc 127.0.0.1 6380
 
 If the connection succeeds, the terminal will wait for input and the server will log the new client connection.
 
-At the current stage, Bolt accepts TCP connections but does not yet process commands, so typing text into the client will not produce a response.
+Run commands:
+
+```text
+SET name saksham
+OK
+GET name
+saksham
+GET missing
+(nil)
+```
+
+Supported commands:
+
+- `SET <key> <value>`
+- `GET <key>`
+
+Invalid commands return an `ERR ...` response and the connection remains open.
 
 To disconnect, press **Ctrl+C** or **Ctrl+D** in the client terminal.
 
@@ -96,22 +139,24 @@ Project documentation lives in the `docs/` directory.
 
 - `PRD.md` – Product requirements and roadmap
 - `SSOT.md` – Architecture and engineering decisions
+- `ARCHITECTURE.md` – Current package boundaries and request flow
+- `adr/` – Architectural decision records
 
 ## Roadmap
 
-### Phase 1
+### Stage 1
 Core in-memory database
 
-### Phase 2
+### Stage 2
 Networking
 
-### Phase 3
+### Stage 3
 Persistence
 
-### Phase 4
+### Stage 4
 Replication
 
-### Phase 5
+### Stage 5
 Distributed Bolt
 
 ## Development
