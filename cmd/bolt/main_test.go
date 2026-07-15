@@ -46,3 +46,16 @@ func TestParseConfigUsesPersistenceFlags(t *testing.T) {
 		t.Fatalf("expected configured snapshot path %q, got %q", "/tmp/bolt.snapshot", config.SnapshotPath)
 	}
 }
+
+func TestParseConfigUsesReplicaOfFlag(t *testing.T) {
+	config, err := parseConfig([]string{
+		"-replicaof", "127.0.0.1:6380",
+	})
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+
+	if config.ReplicaOf != "127.0.0.1:6380" {
+		t.Fatalf("expected configured replica source %q, got %q", "127.0.0.1:6380", config.ReplicaOf)
+	}
+}

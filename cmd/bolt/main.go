@@ -11,6 +11,7 @@ import (
 
 	"github.com/stevenstank/bolt/internal/command"
 	"github.com/stevenstank/bolt/internal/engine"
+	"github.com/stevenstank/bolt/internal/replication"
 	"github.com/stevenstank/bolt/internal/server"
 	"github.com/stevenstank/bolt/internal/storage"
 )
@@ -19,6 +20,7 @@ type config struct {
 	Addr         string
 	AOFPath      string
 	SnapshotPath string
+	ReplicaOf    string
 }
 
 func main() {
@@ -32,17 +34,45 @@ func main() {
 		log.Fatal(err)
 	}
 
+	var replica *replication.Replica
+	var primary *replication.Primary
+	db := engine.New(store)
+	if config.ReplicaOf != "" {
+		db.SetReadOnly(true)
+		replica = replication.NewReplica(replication.ReplicaConfig{
+			PrimaryAddr: config.ReplicaOf,
+			Store:       db,
+		}, nil)
+	} else {
+		primary = replication.NewPrimary(store, nil)
+		db = engine.New(store, primary)
+	}
+
+	var replicaAccepter server.ReplicaAccepter
+	if primary != nil {
+		replicaAccepter = primary
+	}
+
 	srv := server.New(server.Config{
-		Addr:      config.Addr,
-		Processor: command.NewProcessor(command.NewDispatcher(engine.New(store))),
+		Addr:            config.Addr,
+		Processor:       command.NewProcessor(command.NewDispatcher(db)),
+		ReplicaAccepter: replicaAccepter,
 	})
 	if err := srv.Start(); err != nil {
 		log.Fatal(err)
 	}
 
+	replicaCtx, cancelReplica := context.WithCancel(context.Background())
+	defer cancelReplica()
+	if replica != nil {
+		go replica.Run(replicaCtx)
+	}
+
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	<-signals
+
+	cancelReplica()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -62,6 +92,7 @@ func parseConfig(args []string) (config, error) {
 	flags.StringVar(&config.Addr, "addr", "127.0.0.1:6379", "TCP listen address")
 	flags.StringVar(&config.AOFPath, "aof", "bolt.aof", "append-only persistence file")
 	flags.StringVar(&config.SnapshotPath, "snapshot", "bolt.snapshot", "snapshot persistence file")
+	flags.StringVar(&config.ReplicaOf, "replicaof", "", "primary address to replicate from")
 
 	if err := flags.Parse(args); err != nil {
 		return config, err

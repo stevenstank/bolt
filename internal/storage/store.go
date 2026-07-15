@@ -101,3 +101,15 @@ func (s *Store) Get(key string) (string, bool) {
 	value, ok := s.data[key]
 	return value, ok
 }
+
+// Snapshot returns a copy of the current key-value data.
+func (s *Store) Snapshot() map[string]string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	snapshot := make(map[string]string, len(s.data))
+	for key, value := range s.data {
+		snapshot[key] = value
+	}
+	return snapshot
+}

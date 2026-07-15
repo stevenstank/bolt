@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	eengine "github.com/stevenstank/bolt/internal/engine"
 	"github.com/stevenstank/bolt/internal/protocol"
 )
 
@@ -95,6 +96,41 @@ func TestDispatcherReturnsErrorWhenSetCannotPersist(t *testing.T) {
 
 	if response != "ERR disk full" {
 		t.Fatalf("expected response %q, got %q", "ERR disk full", response)
+	}
+}
+
+func TestDispatcherRejectsSetWhenEngineIsReadOnly(t *testing.T) {
+	store := newMemoryStore()
+	eng := eengine.New(store)
+	eng.SetReadOnly(true)
+	dispatcher := NewDispatcher(eng)
+
+	response := dispatcher.Dispatch(protocol.Command{
+		Name: "SET",
+		Args: []string{"name", "saksham"},
+	})
+
+	if response != "ERR replica is read-only" {
+		t.Fatalf("expected response %q, got %q", "ERR replica is read-only", response)
+	}
+}
+
+func TestDispatcherStillAllowsReadsWhenEngineIsReadOnly(t *testing.T) {
+	store := newMemoryStore()
+	eng := eengine.New(store)
+	eng.SetReadOnly(true)
+	if err := eng.ApplySet("name", "saksham"); err != nil {
+		t.Fatalf("seed replicated value: %v", err)
+	}
+	dispatcher := NewDispatcher(eng)
+
+	response := dispatcher.Dispatch(protocol.Command{
+		Name: "GET",
+		Args: []string{"name"},
+	})
+
+	if response != "saksham" {
+		t.Fatalf("expected response %q, got %q", "saksham", response)
 	}
 }
 

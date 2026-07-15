@@ -73,6 +73,22 @@ func TestStoreGetMissingKey(t *testing.T) {
 	}
 }
 
+func TestStoreSnapshotReturnsCopyOfCurrentData(t *testing.T) {
+	store := NewStore()
+	store.Set("name", "bolt")
+
+	snapshot := store.Snapshot()
+	snapshot["name"] = "mutated"
+
+	got, ok := store.Get("name")
+	if !ok {
+		t.Fatal("expected key to exist")
+	}
+	if got != "bolt" {
+		t.Fatalf("expected store value %q, got %q", "bolt", got)
+	}
+}
+
 func TestPersistentStoreLoadsValuesFromAOF(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bolt.aof")
 

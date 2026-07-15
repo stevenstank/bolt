@@ -171,6 +171,16 @@ Deferred beyond Stage 3:
 
 Implement primary/replica replication with synchronization and heartbeats.
 
+Completed Stage 4 scope:
+
+- Primary accepts replica connections
+- Replica connects to primary with `-replicaof`
+- Initial synchronization via snapshot transfer
+- Live write streaming from primary to replicas
+- Replica application of replicated updates
+- Heartbeats and reconnect attempts
+- Replica client writes are rejected with a read-only error
+
 ---
 
 ## Phase 5 — Distributed Bolt

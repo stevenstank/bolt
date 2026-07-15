@@ -17,9 +17,15 @@ type Processor interface {
 
 // Config contains TCP server configuration.
 type Config struct {
-	Addr      string
-	Logger    *log.Logger
-	Processor Processor
+	Addr            string
+	Logger          *log.Logger
+	Processor       Processor
+	ReplicaAccepter ReplicaAccepter
+}
+
+// ReplicaAccepter receives replica handshake connections.
+type ReplicaAccepter interface {
+	AcceptReplica(conn net.Conn)
 }
 
 // Server owns Bolt's TCP listener and client connections.
@@ -27,6 +33,7 @@ type Server struct {
 	addr      string
 	logger    *log.Logger
 	processor Processor
+	replicaAccepter ReplicaAccepter
 
 	mu       sync.Mutex
 	listener net.Listener
@@ -52,6 +59,7 @@ func New(config Config) *Server {
 		addr:      addr,
 		logger:    logger,
 		processor: config.Processor,
+		replicaAccepter: config.ReplicaAccepter,
 		clients:   make(map[net.Conn]struct{}),
 		done:      make(chan struct{}),
 	}
@@ -161,7 +169,11 @@ func (s *Server) acceptLoop(listener net.Listener) {
 
 func (s *Server) handleConnection(conn net.Conn) {
 	defer s.wg.Done()
+	handedOff := false
 	defer func() {
+		if handedOff {
+			return
+		}
 		conn.Close()
 
 		s.mu.Lock()
@@ -173,10 +185,22 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	s.logger.Printf("client connected: %s", conn.RemoteAddr().String())
 	scanner := bufio.NewScanner(conn)
+	isFirstLine := true
 	for scanner.Scan() {
+		line := scanner.Text()
+		if isFirstLine && s.replicaAccepter != nil && line == "SYNC" {
+			handedOff = true
+			s.mu.Lock()
+			delete(s.clients, conn)
+			s.mu.Unlock()
+			s.replicaAccepter.AcceptReplica(conn)
+			return
+		}
+		isFirstLine = false
+
 		response := "ERR server is not configured to process commands"
 		if s.processor != nil {
-			response = s.processor.Process(scanner.Text())
+			response = s.processor.Process(line)
 		}
 		if _, err := conn.Write([]byte(response + "\n")); err != nil {
 			return

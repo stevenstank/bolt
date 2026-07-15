@@ -212,6 +212,37 @@ func TestServerKeepsConnectionOpenAfterErrorResponse(t *testing.T) {
 	}
 }
 
+func TestServerHandsOffReplicaSyncConnections(t *testing.T) {
+	acceptor := &recordingReplicaAccepter{}
+	srv := New(Config{
+		Addr:            "127.0.0.1:0",
+		ReplicaAccepter: acceptor,
+	})
+	t.Cleanup(func() {
+		_ = srv.Shutdown(context.Background())
+	})
+
+	if err := srv.Start(); err != nil {
+		t.Fatalf("start server: %v", err)
+	}
+
+	conn, err := net.DialTimeout("tcp", srv.Addr(), time.Second)
+	if err != nil {
+		t.Fatalf("dial server: %v", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.Write([]byte("SYNC\n")); err != nil {
+		t.Fatalf("write sync command: %v", err)
+	}
+
+	waitFor(t, time.Second, func() bool {
+		acceptor.mu.Lock()
+		defer acceptor.mu.Unlock()
+		return acceptor.called == 1
+	})
+}
+
 type recordingProcessor struct {
 	mu        sync.Mutex
 	responses []string
@@ -243,4 +274,16 @@ func waitFor(t *testing.T, timeout time.Duration, condition func() bool) {
 	}
 
 	t.Fatal("condition was not met before timeout")
+}
+
+type recordingReplicaAccepter struct {
+	mu     sync.Mutex
+	called int
+}
+
+func (a *recordingReplicaAccepter) AcceptReplica(conn net.Conn) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	a.called++
 }

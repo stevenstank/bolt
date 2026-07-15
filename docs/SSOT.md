@@ -44,6 +44,12 @@ Whenever a major architectural decision changes, this document should be updated
       ┌────────┼─────────┐
       ▼        ▼         ▼
    Memory  Persistence Replication
+
+    Replication is a side-channel that observes successful primary writes and streams
+    them to replica nodes without bypassing the server, command, or engine layers.
+
+    Replica clients are read-only. The engine rejects normal writes in replica mode,
+    but still accepts trusted replicated writes through a separate engine path.
 ```
 
 ---
@@ -65,10 +71,13 @@ internal/
     protocol/
     server/
     storage/
+    replication/
 
 docs/
     PRD.md
     SSOT.md
+    ARCHITECTURE.md
+    adr/
 ```
 
 Expected long-term structure:
@@ -120,7 +129,7 @@ Responsible for:
 
 Must never manipulate storage directly.
 
-Current Stage 3 status:
+Current Stage 4 status:
 
 - The server accepts TCP connections.
 - The listen address is configurable.
@@ -130,6 +139,8 @@ Current Stage 3 status:
 - The server delegates command processing through a `Processor` interface.
 - The server writes one newline-terminated response per command.
 - The server never manipulates storage directly.
+- A primary server can hand replica connections to the replication layer.
+- Replica mode is configured from the CLI with `-replicaof`.
 
 ---
 
@@ -148,6 +159,8 @@ Current:
 - Whitespace separates command name and arguments.
 - Command names are case-insensitive.
 - Supported commands are `SET <key> <value>` and `GET <key>`.
+
+Replication uses a plain-text stream with `SNAPSHOT BEGIN`, `SNAPSHOT END`, `PING`, `PONG`, and length-prefixed `SET` records.
 
 Later:
 
@@ -175,9 +188,9 @@ Current:
 
 Responsible for:
 
-- Coordinating protocol parsing and command dispatch
-- Providing the server-facing command processor interface
-- Converting malformed input into error responses
+- Coordinating storage writes and reads
+- Notifying replication observers after successful writes
+- Providing the storage-backed command execution surface
 
 ---
 
@@ -203,6 +216,11 @@ Current Stage 3 status:
 - Persistent writes are appended before the in-memory map is updated.
 - Startup replay returns an error for complete corrupt AOF records.
 - Startup replay recovers from incomplete trailing AOF records by truncating the partial tail.
+
+Current Stage 4 status:
+
+- Stores expose a snapshot copy for replica bootstrapping.
+- Replication uses snapshots without bypassing the storage package.
 
 ---
 
@@ -232,6 +250,17 @@ Responsible for:
 - Replica synchronization
 - Streaming updates
 - Heartbeats
+- Reconnect attempts
+- Initial snapshot sync
+
+Current Stage 4 status:
+
+- `Primary` accepts replica connections and sends a snapshot before live updates.
+- `Primary` broadcasts successful writes to connected replicas.
+- `Replica` connects to the primary, applies snapshot records, applies streamed writes, and responds to heartbeats.
+- Replication traffic stays plain text and never bypasses the server or engine layers.
+- Replica client `SET` commands are rejected by the engine with a read-only error.
+- Replication uses the engine's trusted apply path so primary updates still land on replicas.
 
 ---
 

@@ -6,7 +6,7 @@ The goal of this project is to learn how modern databases are built from first p
 
 ## Current Status
 
-Bolt has completed **Stage 3 – Persistence**.
+Bolt has completed **Stage 4 – Replication**.
 
 Implemented so far:
 
@@ -26,11 +26,17 @@ Implemented so far:
 - Snapshot save/load primitives
 - AOF recovery from incomplete trailing writes
 - Configurable AOF and snapshot file paths
+- Primary/replica replication
+- Replica auto-connect to a primary
+- Initial snapshot synchronization
+- Streaming live writes to replicas
+- Heartbeats and reconnect attempts
+- Replica read-only command handling
 
 Coming next:
 
 - Expiration support
-- Replication
+- Distributed Bolt features
 
 ## Project Structure
 
@@ -68,6 +74,14 @@ Start the Bolt server:
 go run ./cmd/bolt -addr 127.0.0.1:6380
 ```
 
+Start a replica:
+
+```bash
+go run ./cmd/bolt \
+  -addr 127.0.0.1:6381 \
+  -replicaof 127.0.0.1:6380
+```
+
 You should see:
 
 ```text
@@ -87,6 +101,10 @@ go run ./cmd/bolt \
   -aof /tmp/bolt.aof \
   -snapshot /tmp/bolt.snapshot
 ```
+
+The replica mode uses the same persistence flags and connects to the primary automatically.
+
+Replica client commands are read-only. `SET` on a replica returns an error, while replicated updates from the primary still apply.
 
 ### Connect to the server
 
