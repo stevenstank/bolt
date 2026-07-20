@@ -367,3 +367,20 @@ SET	4:name	7:saksham
 SET	5:quote	21:hello world from bolt
 SET	4:test	7:restart
 SET	7:test123	5:hello
+SET	1:a	1:1
+SET	3:age	14:19GET language
+SET	1:b	1:2
+SET	1:c	1:3
+SET	4:city	5:Delhi
+SET	6:colour	4:blue
+SET	7:country	5:India
+SET	2:db	4:bolt
+SET	3:foo	3:bar
+SET	9:framework	2:Go
+SET	6:hacked	3:yes
+SET	5:hello	5:world
+SET	8:language	2:go
+SET	4:name	7:saksham
+SET	5:quote	21:hello world from bolt
+SET	4:test	7:restart
+SET	7:test123	5:hello

@@ -14,7 +14,7 @@
 
 Bolt is a Redis-inspired in-memory key-value database written in Go.
 
-The project starts as a simple in-memory key-value store and gradually evolves into a production-inspired distributed database to explore storage engines, networking, persistence, concurrency, replication, and distributed systems.
+The project starts as a simple in-memory key-value store and gradually evolves into a production-inspired distributed database to explore storage engines, networking, persistence, concurrency, replication, transactions, and distributed systems.
 
 The objective is to understand how modern databases are built from first principles—not to recreate Redis feature-for-feature.
 
@@ -54,9 +54,7 @@ Bolt should eventually support:
 
 ### Expiration
 
-- EXPIRE
-- TTL
-- PERSIST
+- TTL support
 
 ### Persistence
 
@@ -66,7 +64,8 @@ Bolt should eventually support:
 ### Replication
 
 - Primary → Replica replication
-- Replica synchronization
+- Initial replica synchronization
+- Streaming replication
 
 ### Communication
 
@@ -76,6 +75,11 @@ Bolt should eventually support:
 
 - MULTI
 - EXEC
+- DISCARD
+
+### Runtime Introspection
+
+- INFO
 
 ### Distribution
 
@@ -98,7 +102,7 @@ Bolt should be:
 
 ---
 
-# Out of Scope (Initially)
+# Out of Scope
 
 - SQL
 - Authentication
@@ -106,27 +110,28 @@ Bolt should be:
 - REST API
 - Web Dashboard
 - Raft Consensus
+- Automatic failover
 - Multi-region replication
 
 ---
 
 # Technology
 
-Language
+## Language
 
 - Go
 
-Networking
+## Networking
 
 - TCP
 
-Storage
+## Storage
 
 - Memory
 - Append Only File
 - Snapshots
 
-Testing
+## Testing
 
 - Go testing package
 
@@ -134,58 +139,75 @@ Testing
 
 # Development Roadmap
 
-## Phase 1 — Core Database
+## Stage 1 — Core Database
 
-Build an in-memory key-value database with thread-safe storage and core commands.
+Build an in-memory key-value database with thread-safe storage and basic key-value operations.
 
----
+Completed:
 
-## Phase 2 — Networking
-
-Turn Bolt into a TCP server capable of serving multiple concurrent clients.
-
----
-
-## Phase 3 — Durability
-
-Implement expiration, append-only persistence, snapshots, and crash recovery.
-
-Completed Stage 3 scope:
-
-- Append Only File (AOF) records for SET operations
-- AOF replay into the in-memory store on startup
-- AOF crash recovery for incomplete trailing records
-- Deterministic snapshot save/load primitives
-- Server configuration for AOF and snapshot file paths
-- Plain-text TCP command parsing for SET and GET
-- Command dispatch through the engine and storage layers
-- Manual TCP usage through Netcat
-
-Deferred beyond Stage 3:
-
-- Expiration support
+- Thread-safe storage engine
+- SET
+- GET
 
 ---
 
-## Phase 4 — Replication
+## Stage 2 — Networking
 
-Implement primary/replica replication with synchronization and heartbeats.
+Turn Bolt into a TCP database server.
 
-Completed Stage 4 scope:
+Completed:
+
+- TCP server
+- Plain-text protocol
+- Concurrent client handling
+- Configurable listen address
+- Connection lifecycle management
+
+---
+
+## Stage 3 — Persistence
+
+Implement durability and crash recovery.
+
+Completed:
+
+- Append Only File (AOF)
+- AOF replay during startup
+- Recovery from incomplete AOF writes
+- Snapshot save/load
+- Configurable persistence paths
+- Graceful shutdown persistence
+
+---
+
+## Stage 4 — Replication
+
+Implement primary/replica replication.
+
+Completed:
 
 - Primary accepts replica connections
-- Replica connects to primary with `-replicaof`
-- Initial synchronization via snapshot transfer
-- Live write streaming from primary to replicas
-- Replica application of replicated updates
-- Heartbeats and reconnect attempts
-- Replica client writes are rejected with a read-only error
+- Replica connects using `-replicaof`
+- Initial snapshot synchronization
+- Live write replication
+- Replica applies replicated writes
+- Read-only replica mode
 
 ---
 
-## Phase 5 — Distributed Bolt
+## Stage 5 — Distributed Bolt
 
-Implement pub/sub, transactions, clustering basics, and production-inspired distributed behavior.
+Implement higher-level database features inspired by production systems.
+
+Completed:
+
+- TTL (key expiration)
+- Pub/Sub
+- Transactions (`MULTI`, `EXEC`, `DISCARD`)
+- Runtime metrics (`INFO`)
+- Per-client transaction isolation
+- Graceful server shutdown
+- Replication runtime metadata
 
 ---
 
@@ -196,6 +218,9 @@ By the end of the project Bolt should:
 - Handle multiple concurrent clients
 - Persist data across restarts
 - Replicate data between nodes
-- Support pub/sub
+- Support key expiration
+- Support Pub/Sub messaging
 - Support transactions
+- Expose runtime server metrics
 - Demonstrate production-inspired database architecture
+- Maintain comprehensive automated test coverage

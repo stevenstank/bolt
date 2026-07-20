@@ -41,16 +41,17 @@ Whenever a major architectural decision changes, this document should be updated
                │
                ▼
         Storage Engine
-      ┌────────┼─────────┐
-      ▼        ▼         ▼
-   Memory  Persistence Replication
-
-    Replication is a side-channel that observes successful primary writes and streams
-    them to replica nodes without bypassing the server, command, or engine layers.
-
-    Replica clients are read-only. The engine rejects normal writes in replica mode,
-    but still accepts trusted replicated writes through a separate engine path.
+      ┌──────┼─────────┬────────────┐
+      ▼      ▼         ▼            ▼
+   Memory Persistence Replication Transactions
+               │
+               ▼
+            Pub/Sub
 ```
+
+Replication observes successful writes from the engine and streams them to replicas without bypassing the server, command, or engine layers.
+
+Replica clients are read-only. The engine rejects client writes on replicas while still accepting trusted replicated writes from the primary.
 
 ---
 
@@ -69,9 +70,11 @@ internal/
     engine/
     persistence/
     protocol/
+    pubsub/
+    replication/
     server/
     storage/
-    replication/
+    transaction/
 
 docs/
     PRD.md
@@ -95,7 +98,6 @@ internal/
     command/
     engine/
     storage/
-    expire/
     persistence/
     replication/
     pubsub/
@@ -122,25 +124,23 @@ docs/
 Responsible for:
 
 - TCP listener
-- Client connections
-- One goroutine per accepted client connection
-- Connection lifecycle logging
+- Client connection lifecycle
+- One goroutine per client
 - Graceful shutdown
+- Processor creation
+- Replica connection handoff
 
 Must never manipulate storage directly.
 
-Current Stage 4 status:
+Current Stage 5 status:
 
-- The server accepts TCP connections.
-- The listen address is configurable.
-- Active client connections are closed during shutdown.
-- Each client connection is handled by one goroutine.
-- The server continuously reads newline-delimited command lines.
-- The server delegates command processing through a `Processor` interface.
-- The server writes one newline-terminated response per command.
-- The server never manipulates storage directly.
-- A primary server can hand replica connections to the replication layer.
-- Replica mode is configured from the CLI with `-replicaof`.
+- Accepts TCP connections.
+- Supports configurable listen addresses.
+- Creates an isolated processor per client.
+- Delivers Pub/Sub messages asynchronously.
+- Hands replica connections to the replication subsystem.
+- Closes active client connections during shutdown.
+- Never accesses storage directly.
 
 ---
 
@@ -154,17 +154,32 @@ Responsible for:
 
 Current:
 
-- Plain text protocol.
-- One command per line.
-- Whitespace separates command name and arguments.
-- Command names are case-insensitive.
-- Supported commands are `SET <key> <value>` and `GET <key>`.
+- Plain-text protocol
+- One command per line
+- Whitespace-delimited arguments
+- Case-insensitive commands
 
-Replication uses a plain-text stream with `SNAPSHOT BEGIN`, `SNAPSHOT END`, `PING`, `PONG`, and length-prefixed `SET` records.
+Supported commands:
 
-Later:
+- SET
+- GET
+- INFO
+- MULTI
+- EXEC
+- DISCARD
+- SUBSCRIBE
+- UNSUBSCRIBE
+- PUBLISH
 
-RESP
+Replication uses a plain-text stream with:
+
+- SNAPSHOT BEGIN
+- SNAPSHOT END
+- Length-prefixed SET records
+
+Future:
+
+- RESP protocol
 
 ---
 
@@ -174,23 +189,33 @@ Responsible for:
 
 - Command validation
 - Command routing
-- Calling the engine
-- Plain-text response selection
+- Transaction management
+- Pub/Sub routing
+- Runtime information
+- Response generation
 
-Current:
+Current Stage 5 status:
 
-- `SET` returns `OK`.
-- `GET` returns the stored value.
-- Missing `GET` returns `(nil)`.
-- Invalid commands return `ERR ...`.
+- Handles key-value commands.
+- Handles transactions.
+- Handles Pub/Sub commands.
+- Produces INFO responses.
+- Delegates storage operations to the engine.
+
+---
 
 ## Engine
 
 Responsible for:
 
-- Coordinating storage writes and reads
-- Notifying replication observers after successful writes
-- Providing the storage-backed command execution surface
+- Coordinating reads and writes
+- Managing TTL-aware operations
+- Rejecting client writes on replicas
+- Accepting trusted replicated writes
+- Notifying replication observers
+- Providing runtime statistics
+
+The engine owns the application's business logic and is the only component allowed to manipulate storage.
 
 ---
 
@@ -202,25 +227,19 @@ Responsible for:
 - Writes
 - Deletes
 - Locking
-- Expiration
+- Expiration metadata
 
-Storage must never know about networking.
+Storage never knows about networking.
 
-Current Stage 3 status:
+Current Stage 5 status:
 
-- `NewStore` creates an in-memory-only store.
-- `NewPersistentStore` creates a store backed by an Append Only File.
-- `NewDurableStore` creates a store backed by AOF and snapshot files.
-- Durable startup loads the snapshot first and replays the AOF second.
-- `SaveSnapshot` writes a point-in-time copy of current data.
-- Persistent writes are appended before the in-memory map is updated.
-- Startup replay returns an error for complete corrupt AOF records.
-- Startup replay recovers from incomplete trailing AOF records by truncating the partial tail.
-
-Current Stage 4 status:
-
-- Stores expose a snapshot copy for replica bootstrapping.
-- Replication uses snapshots without bypassing the storage package.
+- Thread-safe in-memory key-value storage.
+- Optional expiration timestamps.
+- Snapshot support.
+- AOF-backed durability.
+- Snapshot export for replication.
+- Key count reporting.
+- Memory usage estimation.
 
 ---
 
@@ -233,12 +252,14 @@ Responsible for:
 - Snapshot loading
 - Crash recovery
 
-Current Stage 3 status:
+Current Stage 5 status:
 
-- `internal/persistence` owns all on-disk record formatting and parsing.
-- The AOF records SET operations in a deterministic length-prefixed text format.
-- Snapshot files use the same SET record representation and write keys in sorted order.
-- Persistence has no dependency on networking or server lifecycle code.
+- Owns all on-disk serialization.
+- Uses deterministic length-prefixed records.
+- Persists expiration timestamps.
+- Supports snapshot loading.
+- Replays AOF during startup.
+- Recovers from incomplete trailing AOF writes.
 - Default files are `bolt.aof` and `bolt.snapshot`.
 
 ---
@@ -248,19 +269,18 @@ Current Stage 3 status:
 Responsible for:
 
 - Replica synchronization
-- Streaming updates
-- Heartbeats
-- Reconnect attempts
-- Initial snapshot sync
+- Initial snapshot transfer
+- Streaming primary writes
+- Replica read-only mode
 
-Current Stage 4 status:
+Current Stage 5 status:
 
-- `Primary` accepts replica connections and sends a snapshot before live updates.
-- `Primary` broadcasts successful writes to connected replicas.
-- `Replica` connects to the primary, applies snapshot records, applies streamed writes, and responds to heartbeats.
-- Replication traffic stays plain text and never bypasses the server or engine layers.
-- Replica client `SET` commands are rejected by the engine with a read-only error.
-- Replication uses the engine's trusted apply path so primary updates still land on replicas.
+- Primary accepts replica connections.
+- Replica synchronizes from a snapshot.
+- Successful writes are streamed to replicas.
+- Replicated writes preserve expiration metadata.
+- Replication integrates through the engine.
+- Replica clients are read-only.
 
 ---
 
@@ -268,9 +288,17 @@ Current Stage 4 status:
 
 Responsible for:
 
-- Channels
-- Subscribers
+- Channel management
+- Subscriber management
 - Message broadcasting
+- Subscriber cleanup
+
+Current Stage 5 status:
+
+- Multiple subscribers per channel.
+- Broadcasts messages to all subscribers.
+- Subscribers are isolated per client.
+- Resources are cleaned up during disconnect and shutdown.
 
 ---
 
@@ -278,8 +306,17 @@ Responsible for:
 
 Responsible for:
 
-- Queuing commands
+- Per-client transaction state
+- Command queuing
 - Atomic execution
+
+Current Stage 5 status:
+
+- Supports MULTI.
+- Queues commands.
+- Executes queued commands using EXEC.
+- Clears queued commands using DISCARD.
+- Transaction state is isolated per client.
 
 ---
 
@@ -290,6 +327,10 @@ Responsible for:
 - Node metadata
 - Request routing
 - Cluster communication
+
+Status:
+
+Not yet implemented.
 
 ---
 
@@ -304,23 +345,25 @@ TCP Server
 
 ↓
 
-Parser
+Protocol Parser
 
 ↓
 
-Dispatcher
+Command Dispatcher
 
 ↓
 
 Engine
 
-↓
+├── Storage
 
-Storage Engine
+├── Persistence
 
-↓
+├── Replication
 
-Persistence
+├── Transactions
+
+└── Pub/Sub
 
 ↓
 
@@ -342,18 +385,22 @@ Persistence is layered on top through:
 - Append Only File
 - Snapshots
 
-Networking never modifies storage directly.
+All writes pass through the engine.
 
-All writes pass through the storage engine.
+Networking never manipulates storage directly.
+
+Replication never bypasses the engine.
 
 ---
 
 # Concurrency Rules
 
-- One goroutine per client.
+- One goroutine per client connection.
+- One processor instance per client.
+- Transaction state is isolated per client.
 - Shared state must be synchronized.
-- Avoid unnecessary global state.
 - Storage must be thread-safe.
+- Pub/Sub delivery occurs asynchronously.
 - Favor simple locking strategies.
 
 ---
@@ -364,6 +411,7 @@ All writes pass through the storage engine.
 - Return meaningful errors.
 - Log internal failures.
 - Invalid commands must never crash the server.
+- Replicas reject client write commands.
 
 ---
 
@@ -390,13 +438,14 @@ Requirements:
 - Table-driven tests
 - Unit tests first
 - Deterministic behavior
+- Race-free concurrency
 - No flaky tests
 
 ---
 
 # Development Rules
 
-- Build one phase at a time.
+- Build one stage at a time.
 - Finish tests before moving forward.
 - Update the SSOT whenever architecture changes.
 - Avoid premature optimization.
@@ -404,18 +453,29 @@ Requirements:
 
 ---
 
-# Development Phases
+# Development Stages
 
-| Phase | Goal |
-|--------|------|
-| 1 | Core in-memory database |
-| 2 | TCP server & networking |
-| 3 | Persistence & expiration |
-| 4 | Replication |
-| 5 | Distributed Bolt |
+| Stage | Goal | Status |
+|--------|------|--------|
+| 1 | Core in-memory database | ✅ |
+| 2 | TCP networking | ✅ |
+| 3 | Persistence | ✅ |
+| 4 | Replication | ✅ |
+| 5 | Distributed Bolt | ✅ |
 
 ---
 
 # Long-Term Vision
 
 Bolt should evolve from a simple in-memory key-value store into a production-inspired distributed database while remaining educational, maintainable, and easy to understand.
+
+Future work may include:
+
+- Additional data structures
+- More Redis-compatible commands
+- RESP protocol
+- Clustering
+- Automatic failover
+- Leader election
+- Sharding
+- Improved observability

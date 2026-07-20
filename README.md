@@ -2,11 +2,11 @@
 
 Bolt is a Redis-inspired in-memory key-value database written in Go.
 
-The goal of this project is to learn how modern databases are built from first principles. Bolt starts as a simple in-memory key-value store and will gradually evolve to include networking, persistence, replication, and distributed systems concepts.
+The goal of this project is to learn how modern databases are built from first principles. Bolt starts as a simple in-memory key-value store and gradually evolves to include networking, persistence, replication, transactions, and distributed systems concepts.
 
 ## Current Status
 
-Bolt has completed **Stage 4 – Replication**.
+Bolt has completed **Stage 5 – Distributed Bolt**.
 
 Implemented so far:
 
@@ -17,26 +17,25 @@ Implemented so far:
 - Configurable listen address
 - Concurrent client connections
 - Connection logging
-- Clean shutdown
+- Graceful shutdown
 - Plain-text command parsing
 - Command dispatch
 - Storage integration over TCP
-- Append Only File (AOF) persistence primitive
+- Append Only File (AOF) persistence
 - Persistent store recovery from AOF
-- Snapshot save/load primitives
-- AOF recovery from incomplete trailing writes
+- Snapshot save/load
+- Recovery from incomplete AOF writes
 - Configurable AOF and snapshot file paths
 - Primary/replica replication
 - Replica auto-connect to a primary
 - Initial snapshot synchronization
 - Streaming live writes to replicas
-- Heartbeats and reconnect attempts
-- Replica read-only command handling
-
-Coming next:
-
-- Expiration support
-- Distributed Bolt features
+- Replica read-only mode
+- TTL (key expiration)
+- Pub/Sub messaging
+- Transactions (`MULTI`, `EXEC`, `DISCARD`)
+- Runtime server metrics (`INFO`)
+- Per-client transaction isolation
 
 ## Project Structure
 
@@ -54,8 +53,11 @@ bolt/
 │   ├── engine/
 │   ├── persistence/
 │   ├── protocol/
+│   ├── pubsub/
+│   ├── replication/
 │   ├── server/
-│   └── storage/
+│   ├── storage/
+│   └── transaction/
 ├── README.md
 └── go.mod
 ```
@@ -68,7 +70,7 @@ go build ./...
 
 ## Run
 
-Start the Bolt server:
+Start the primary server:
 
 ```bash
 go run ./cmd/bolt -addr 127.0.0.1:6380
@@ -82,18 +84,12 @@ go run ./cmd/bolt \
   -replicaof 127.0.0.1:6380
 ```
 
-You should see:
-
-```text
-server listening on 127.0.0.1:6380
-```
-
-By default Bolt writes persistence files in the current working directory:
+By default Bolt stores persistence files in the current working directory:
 
 - `bolt.aof`
 - `bolt.snapshot`
 
-You can override them:
+Override them if needed:
 
 ```bash
 go run ./cmd/bolt \
@@ -102,44 +98,66 @@ go run ./cmd/bolt \
   -snapshot /tmp/bolt.snapshot
 ```
 
-The replica mode uses the same persistence flags and connects to the primary automatically.
+## Connect
 
-Replica client commands are read-only. `SET` on a replica returns an error, while replicated updates from the primary still apply.
-
-### Connect to the server
-
-Open a new terminal and connect using `netcat`:
+Open another terminal:
 
 ```bash
 nc 127.0.0.1 6380
 ```
 
-If the connection succeeds, the terminal will wait for input and the server will log the new client connection.
-
-Run commands:
+Example session:
 
 ```text
 SET name saksham
 OK
+
 GET name
 saksham
-GET missing
-(nil)
+
+SET session abc123 EX 60
+OK
+
+INFO
+node_id: 0a4aa3d53da799c0
+role: primary
+uptime: 25
+connected_clients: 1
+replication_status: waiting
+connected_replicas: 0
+key_count: 2
+memory_usage: 22
 ```
 
-Supported commands:
+## Supported Commands
+
+### Key-Value
 
 - `SET <key> <value>`
+- `SET <key> <value> EX <seconds>`
 - `GET <key>`
 
-Invalid commands return an `ERR ...` response and the connection remains open.
+### Transactions
 
-To disconnect, press **Ctrl+C** or **Ctrl+D** in the client terminal.
+- `MULTI`
+- `EXEC`
+- `DISCARD`
 
-> **Note:** Bolt defaults to `127.0.0.1:6379`, which is also Redis's default port. If Redis is running on your machine, use another port such as `6380`.
+### Pub/Sub
 
+- `SUBSCRIBE <channel>`
+- `UNSUBSCRIBE <channel>`
+- `PUBLISH <channel> <message>`
+
+### Server
+
+- `INFO`
+
+Replica nodes remain read-only. Any write command sent directly to a replica returns an error, while replicated updates from the primary continue to apply normally.
 
 ## Test
+
+Run all tests:
 
 ```bash
 go test ./...
@@ -157,28 +175,17 @@ Project documentation lives in the `docs/` directory.
 
 - `PRD.md` – Product requirements and roadmap
 - `SSOT.md` – Architecture and engineering decisions
-- `ARCHITECTURE.md` – Current package boundaries and request flow
+- `ARCHITECTURE.md` – Package structure and request flow
 - `adr/` – Architectural decision records
 
 ## Roadmap
 
-### Stage 1
-Core in-memory database
-
-### Stage 2
-Networking
-
-### Stage 3
-Persistence
-
-### Stage 4
-Replication
-
-### Stage 5
-Distributed Bolt
+- ✅ Stage 1 – Core in-memory database
+- ✅ Stage 2 – Networking
+- ✅ Stage 3 – Persistence
+- ✅ Stage 4 – Replication
+- ✅ Stage 5 – Distributed Bolt
 
 ## Development
 
-Bolt is being built incrementally using Test-Driven Development (TDD). Every feature starts with tests before implementation.
-
-Each phase focuses on one major concept so the codebase stays small, readable, and easy to understand.
+Bolt is built incrementally using Test-Driven Development (TDD). Every feature begins with tests before implementation, with each stage introducing a major database concept while keeping the codebase modular and easy to understand.
