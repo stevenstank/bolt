@@ -2,7 +2,9 @@ package command
 
 import (
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	eengine "github.com/stevenstank/bolt/internal/engine"
 	"github.com/stevenstank/bolt/internal/protocol"
@@ -134,16 +136,54 @@ func TestDispatcherStillAllowsReadsWhenEngineIsReadOnly(t *testing.T) {
 	}
 }
 
+func TestDispatcherExecutesSetWithExpiry(t *testing.T) {
+	store := newMemoryStore()
+	dispatcher := NewDispatcher(store)
+
+	response := dispatcher.Dispatch(protocol.Command{
+		Name: "SET",
+		Args: []string{"name", "saksham", "EX", "60"},
+	})
+
+	if response != "OK" {
+		t.Fatalf("expected response %q, got %q", "OK", response)
+	}
+	if got := store.values["name"]; got != "saksham" {
+		t.Fatalf("expected stored value %q, got %q", "saksham", got)
+	}
+	if _, ok := store.expires["name"]; !ok {
+		t.Fatal("expected expiry to be set")
+	}
+}
+
+func TestDispatcherRejectsInvalidExpiry(t *testing.T) {
+	dispatcher := NewDispatcher(newMemoryStore())
+
+	response := dispatcher.Dispatch(protocol.Command{
+		Name: "SET",
+		Args: []string{"name", "saksham", "EX", "invalid"},
+	})
+
+	if response != "ERR invalid EX seconds \"invalid\"" {
+		t.Fatalf("expected response %q, got %q", "ERR invalid EX seconds \"invalid\"", response)
+	}
+}
+
+
 type memoryStore struct {
-	values map[string]string
-	setErr error
+	mu      sync.Mutex
+	values  map[string]string
+	expires map[string]time.Time
+	setErr  error
 }
 
 func newMemoryStore() *memoryStore {
-	return &memoryStore{values: map[string]string{}}
+	return &memoryStore{values: map[string]string{}, expires: map[string]time.Time{}}
 }
 
 func (s *memoryStore) Set(key, value string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.setErr != nil {
 		return s.setErr
 	}
@@ -151,7 +191,44 @@ func (s *memoryStore) Set(key, value string) error {
 	return nil
 }
 
+func (s *memoryStore) SetWithExpiry(key, value string, expiresAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.setErr != nil {
+		return s.setErr
+	}
+	s.values[key] = value
+	s.expires[key] = expiresAt
+	return nil
+}
+
 func (s *memoryStore) Get(key string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	value, ok := s.values[key]
 	return value, ok
+}
+
+func (s *memoryStore) ApplySet(key, value string) error {
+	return s.Set(key, value)
+}
+
+func (s *memoryStore) ApplySetWithExpiry(key, value string, expiresAt time.Time) error {
+	return s.SetWithExpiry(key, value, expiresAt)
+}
+
+func (s *memoryStore) KeyCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.values)
+}
+
+func (s *memoryStore) MemoryUsage() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var total int64
+	for _, value := range s.values {
+		total += int64(len(value))
+	}
+	return total
 }

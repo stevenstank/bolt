@@ -11,6 +11,7 @@ import (
 
 	"github.com/stevenstank/bolt/internal/command"
 	"github.com/stevenstank/bolt/internal/engine"
+	"github.com/stevenstank/bolt/internal/pubsub"
 	"github.com/stevenstank/bolt/internal/replication"
 	"github.com/stevenstank/bolt/internal/server"
 	"github.com/stevenstank/bolt/internal/storage"
@@ -53,11 +54,27 @@ func main() {
 		replicaAccepter = primary
 	}
 
-	srv := server.New(server.Config{
-		Addr:            config.Addr,
-		Processor:       command.NewProcessor(command.NewDispatcher(db)),
-		ReplicaAccepter: replicaAccepter,
-	})
+	pubsubHub := pubsub.NewHub()
+
+	var replicationInfo server.ReplicationInfo
+
+if primary != nil {
+	replicationInfo = primary
+}
+
+if replica != nil {
+	replicationInfo = replica
+}
+
+srv := server.New(server.Config{
+	Addr:            config.Addr,
+	Processor:       command.NewProcessor(command.NewDispatcher(db)),
+	ReplicaAccepter: replicaAccepter,
+	ReplicationInfo: replicationInfo,
+	PubsubHub:       pubsubHub,
+	Role:            getRole(config.ReplicaOf),
+})
+	srv.SetProcessorInfo()
 	if err := srv.Start(); err != nil {
 		log.Fatal(err)
 	}
@@ -98,4 +115,11 @@ func parseConfig(args []string) (config, error) {
 		return config, err
 	}
 	return config, nil
+}
+
+func getRole(replicaOf string) string {
+	if replicaOf != "" {
+		return "replica"
+	}
+	return "primary"
 }

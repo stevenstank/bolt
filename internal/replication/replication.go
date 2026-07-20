@@ -11,16 +11,19 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/stevenstank/bolt/internal/record"
 )
 
 // Snapshotter exposes a consistent copy of data for replica bootstrapping.
 type Snapshotter interface {
-	Snapshot() map[string]string
+	Snapshot() map[string]record.Entry
 }
 
 // SetApplier applies replicated writes.
 type SetApplier interface {
 	ApplySet(key, value string) error
+	ApplySetWithExpiry(key, value string, expiresAt time.Time) error
 }
 
 // ReplicaConfig configures a background replica connection.
@@ -73,17 +76,54 @@ func (p *Primary) AcceptReplica(conn net.Conn) {
 	go p.sendHeartbeats(replica)
 }
 
+func (p *Primary) ConnectedReplicas() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	return len(p.replicas)
+}
+
+func (p *Primary) ReplicationStatus() string {
+	if p.ConnectedReplicas() > 0 {
+		return "connected"
+	}
+	return "waiting"
+}
+
+func (r *Replica) ConnectedReplicas() int {
+	return 0
+}
+
+func (r *Replica) ReplicationStatus() string {
+	return "connected"
+}
+
 // OnSet broadcasts a replicated SET to connected replicas.
 func (p *Primary) OnSet(key, value string) {
+	p.OnSetWithExpiry(key, value, time.Time{})
+}
+
+// OnSetWithExpiry broadcasts a replicated SET with TTL to connected replicas.
+func (p *Primary) OnSetWithExpiry(key, value string, expiresAt time.Time) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	for replica := range p.replicas {
-		if err := replica.writeLine(formatSetRecord(key, value)); err != nil {
+		if err := replica.writeLine(formatSetRecordWithExpiry(key, value, expiresAt)); err != nil {
 			delete(p.replicas, replica)
 			_ = replica.conn.Close()
 		}
 	}
+}
+
+// ApplySet is a no-op for primary (it doesn't apply writes).
+func (p *Primary) ApplySet(key, value string) error {
+	return nil
+}
+
+// ApplySetWithExpiry is a no-op for primary (it doesn't apply writes).
+func (p *Primary) ApplySetWithExpiry(key, value string, expiresAt time.Time) error {
+	return nil
 }
 
 func (p *Primary) writeSnapshotLocked(replica *replicaConn) error {
@@ -99,7 +139,8 @@ func (p *Primary) writeSnapshotLocked(replica *replicaConn) error {
 	sort.Strings(keys)
 
 	for _, key := range keys {
-		if err := replica.writeLine(formatSetRecord(key, snapshot[key])); err != nil {
+		entry := snapshot[key]
+		if err := replica.writeLine(formatSetRecordWithExpiry(key, entry.Value, entry.ExpiresAt)); err != nil {
 			return err
 		}
 	}
@@ -240,12 +281,18 @@ func (r *Replica) processLine(line string, conn net.Conn) error {
 		_, err := fmt.Fprintln(conn, "PONG")
 		return err
 	case strings.HasPrefix(line, "SET\t"):
-		key, value, err := parseSetRecord(line)
+		key, expiresAt, value, err := parseSetRecordWithExpiry(line)
 		if err != nil {
 			return err
 		}
-		if err := r.config.Store.ApplySet(key, value); err != nil {
-			return err
+		if expiresAt.IsZero() {
+			if err := r.config.Store.ApplySet(key, value); err != nil {
+				return err
+			}
+		} else {
+			if err := r.config.Store.ApplySetWithExpiry(key, value, expiresAt); err != nil {
+				return err
+			}
 		}
 		return nil
 	default:
@@ -273,24 +320,55 @@ func isClosedError(err error) bool {
 }
 
 func formatSetRecord(key, value string) string {
-	return fmt.Sprintf("SET\t%d:%s\t%d:%s", len(key), key, len(value), value)
+	return formatSetRecordWithExpiry(key, value, time.Time{})
+}
+
+func formatSetRecordWithExpiry(key, value string, expiresAt time.Time) string {
+	if expiresAt.IsZero() {
+		return fmt.Sprintf("SET\t%d:%s\t%d:%s", len(key), key, len(value), value)
+	}
+	expiresAtText := strconv.FormatInt(expiresAt.UnixNano(), 10)
+	return fmt.Sprintf("SET\t%d:%s\t%d:%s\t%d:%s", len(key), key, len(expiresAtText), expiresAtText, len(value), value)
 }
 
 func parseSetRecord(line string) (string, string, error) {
+	key, _, value, err := parseSetRecordWithExpiry(line)
+	return key, value, err
+}
+
+func parseSetRecordWithExpiry(line string) (string, time.Time, string, error) {
 	parts := strings.Split(line, "\t")
-	if len(parts) != 3 || parts[0] != "SET" {
-		return "", "", fmt.Errorf("invalid replication record: %q", line)
+	if parts[0] != "SET" || (len(parts) != 3 && len(parts) != 4) {
+		return "", time.Time{}, "", fmt.Errorf("invalid replication record: %q", line)
 	}
 
 	key, err := parseLengthPrefixedField(parts[1])
 	if err != nil {
-		return "", "", err
+		return "", time.Time{}, "", err
 	}
-	value, err := parseLengthPrefixedField(parts[2])
+
+	var expiresAt time.Time
+	var valueField string
+	if len(parts) == 3 {
+		valueField = parts[2]
+	} else {
+		expiresAtText, err := parseLengthPrefixedField(parts[2])
+		if err != nil {
+			return "", time.Time{}, "", err
+		}
+		expiresAtUnixNano, err := strconv.ParseInt(expiresAtText, 10, 64)
+		if err != nil {
+			return "", time.Time{}, "", fmt.Errorf("invalid replication expiry %q: %w", expiresAtText, err)
+		}
+		expiresAt = time.Unix(0, expiresAtUnixNano)
+		valueField = parts[3]
+	}
+
+	value, err := parseLengthPrefixedField(valueField)
 	if err != nil {
-		return "", "", err
+		return "", time.Time{}, "", err
 	}
-	return key, value, nil
+	return key, expiresAt, value, nil
 }
 
 func parseLengthPrefixedField(field string) (string, error) {

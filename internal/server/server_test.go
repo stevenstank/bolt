@@ -14,6 +14,7 @@ import (
 
 func TestServerStartsOnConfiguredAddressAndAcceptsConnection(t *testing.T) {
 	srv := New(Config{Addr: "127.0.0.1:0"})
+	srv.SetProcessorInfo()
 	t.Cleanup(func() {
 		_ = srv.Shutdown(context.Background())
 	})
@@ -31,6 +32,7 @@ func TestServerStartsOnConfiguredAddressAndAcceptsConnection(t *testing.T) {
 
 func TestServerAcceptsMultipleClientsConcurrently(t *testing.T) {
 	srv := New(Config{Addr: "127.0.0.1:0"})
+	srv.SetProcessorInfo()
 	t.Cleanup(func() {
 		_ = srv.Shutdown(context.Background())
 	})
@@ -61,6 +63,7 @@ func TestServerLogsConnections(t *testing.T) {
 		Addr:   "127.0.0.1:0",
 		Logger: logger,
 	})
+	srv.SetProcessorInfo()
 	t.Cleanup(func() {
 		_ = srv.Shutdown(context.Background())
 	})
@@ -102,6 +105,7 @@ func (b *lockedBuffer) String() string {
 
 func TestServerShutdownStopsAcceptingConnectionsAndClosesClients(t *testing.T) {
 	srv := New(Config{Addr: "127.0.0.1:0"})
+	srv.SetProcessorInfo()
 	if err := srv.Start(); err != nil {
 		t.Fatalf("start server: %v", err)
 	}
@@ -136,6 +140,7 @@ func TestServerProcessesMultipleCommandsOnOneConnection(t *testing.T) {
 		Addr:      "127.0.0.1:0",
 		Processor: processor,
 	})
+	srv.SetProcessorInfo()
 	t.Cleanup(func() {
 		_ = srv.Shutdown(context.Background())
 	})
@@ -167,9 +172,7 @@ func TestServerProcessesMultipleCommandsOnOneConnection(t *testing.T) {
 		}
 	}
 
-	processor.mu.Lock()
-	defer processor.mu.Unlock()
-	if got := processor.commands; len(got) != 3 || got[0] != "SET name saksham" || got[1] != "GET name" || got[2] != "GET missing" {
+	if got := processor.GetCommands(); len(got) != 3 || got[0] != "SET name saksham" || got[1] != "GET name" || got[2] != "GET missing" {
 		t.Fatalf("expected processed commands, got %v", got)
 	}
 }
@@ -182,6 +185,7 @@ func TestServerKeepsConnectionOpenAfterErrorResponse(t *testing.T) {
 		Addr:      "127.0.0.1:0",
 		Processor: processor,
 	})
+	srv.SetProcessorInfo()
 	t.Cleanup(func() {
 		_ = srv.Shutdown(context.Background())
 	})
@@ -218,6 +222,7 @@ func TestServerHandsOffReplicaSyncConnections(t *testing.T) {
 		Addr:            "127.0.0.1:0",
 		ReplicaAccepter: acceptor,
 	})
+	srv.SetProcessorInfo()
 	t.Cleanup(func() {
 		_ = srv.Shutdown(context.Background())
 	})
@@ -260,6 +265,17 @@ func (p *recordingProcessor) Process(line string) string {
 	response := p.responses[0]
 	p.responses = p.responses[1:]
 	return response
+}
+
+func (p *recordingProcessor) Clone() interface{} {
+	// For testing, return self to track all commands in one place
+	return p
+}
+
+func (p *recordingProcessor) GetCommands() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.commands
 }
 
 func waitFor(t *testing.T, timeout time.Duration, condition func() bool) {

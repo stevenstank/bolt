@@ -4,6 +4,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestEngineStoresAndLoadsValues(t *testing.T) {
@@ -70,7 +71,7 @@ func TestEngineRejectsSetWhenReadOnly(t *testing.T) {
 		t.Fatalf("expected read-only error, got %v", err)
 	}
 
-	if _, ok := store.Get("name"); ok {
+	if _, ok := engine.Get("name"); ok {
 		t.Fatal("expected read-only set not to persist data")
 	}
 }
@@ -94,6 +95,7 @@ func TestEngineAppliesReplicatedSetWhenReadOnly(t *testing.T) {
 }
 
 type memoryStore struct {
+	mu     sync.Mutex
 	values map[string]string
 	setErr error
 }
@@ -103,6 +105,16 @@ func newMemoryStore() *memoryStore {
 }
 
 func (s *memoryStore) Set(key, value string) error {
+	return s.set(key, value)
+}
+
+func (s *memoryStore) SetWithExpiry(key, value string, expiresAt time.Time) error {
+	return s.set(key, value)
+}
+
+func (s *memoryStore) set(key, value string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.setErr != nil {
 		return s.setErr
 	}
@@ -111,8 +123,18 @@ func (s *memoryStore) Set(key, value string) error {
 }
 
 func (s *memoryStore) Get(key string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	value, ok := s.values[key]
 	return value, ok
+}
+
+func (s *memoryStore) ApplySet(key, value string) error {
+	return s.set(key, value)
+}
+
+func (s *memoryStore) ApplySetWithExpiry(key, value string, expiresAt time.Time) error {
+	return s.set(key, value)
 }
 
 type trackingObserver struct {

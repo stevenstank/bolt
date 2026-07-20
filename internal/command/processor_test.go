@@ -1,6 +1,8 @@
 package command
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestProcessorProcessesPlainTextCommands(t *testing.T) {
 	store := newMemoryStore()
@@ -34,3 +36,4 @@ func TestProcessorReturnsErrorForMalformedInput(t *testing.T) {
 		t.Fatalf("expected ERR response, got %q", response)
 	}
 }
+

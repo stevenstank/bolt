@@ -4,6 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/stevenstank/bolt/internal/record"
 )
 
 func TestStoreSetAndGet(t *testing.T) {
@@ -78,7 +81,7 @@ func TestStoreSnapshotReturnsCopyOfCurrentData(t *testing.T) {
 	store.Set("name", "bolt")
 
 	snapshot := store.Snapshot()
-	snapshot["name"] = "mutated"
+	snapshot["name"] = record.Entry{Value: "mutated"}
 
 	got, ok := store.Get("name")
 	if !ok {
@@ -86,6 +89,17 @@ func TestStoreSnapshotReturnsCopyOfCurrentData(t *testing.T) {
 	}
 	if got != "bolt" {
 		t.Fatalf("expected store value %q, got %q", "bolt", got)
+	}
+}
+
+func TestStoreSetWithExpiryExpiresKeys(t *testing.T) {
+	store := NewStore()
+	if err := store.SetWithExpiry("name", "bolt", time.Now().Add(-time.Second)); err != nil {
+		t.Fatalf("set with expiry: %v", err)
+	}
+
+	if _, ok := store.Get("name"); ok {
+		t.Fatal("expected expired key to be removed")
 	}
 }
 
@@ -178,4 +192,55 @@ func TestStoreSaveSnapshotWritesCurrentData(t *testing.T) {
 	if got, ok := restarted.Get("name"); !ok || got != "saksham" {
 		t.Fatalf("expected snapshot value %q, got %q ok=%v", "saksham", got, ok)
 	}
+}
+
+func TestDurableStorePreservesExpiryAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	aofPath := filepath.Join(dir, "bolt.aof")
+	snapshotPath := filepath.Join(dir, "bolt.snapshot")
+
+	store, err := NewDurableStore(aofPath, snapshotPath)
+	if err != nil {
+		t.Fatalf("create durable store: %v", err)
+	}
+	expiresAt := time.Now().Add(time.Hour)
+	if err := store.SetWithExpiry("ttl", "value", expiresAt); err != nil {
+		t.Fatalf("set with expiry: %v", err)
+	}
+
+	restarted, err := NewDurableStore(aofPath, snapshotPath)
+	if err != nil {
+		t.Fatalf("restart durable store: %v", err)
+	}
+
+	got, ok := restarted.Get("ttl")
+	if !ok || got != "value" {
+		t.Fatalf("expected TTL value to survive restart, got %q ok=%v", got, ok)
+	}
+}
+
+func TestStoreBackgroundCleanupRemovesExpiredKeys(t *testing.T) {
+	store := NewStore()
+	defer store.Close()
+
+	if err := store.SetWithExpiry("ttl", "value", time.Now().Add(100*time.Millisecond)); err != nil {
+		t.Fatalf("set with expiry: %v", err)
+	}
+
+	if _, ok := store.Get("ttl"); !ok {
+		t.Fatal("expected key to exist before expiration")
+	}
+
+	time.Sleep(150 * time.Millisecond)
+
+	store.PurgeExpired()
+
+	if _, ok := store.Get("ttl"); ok {
+		t.Fatal("expected expired key to be removed after cleanup")
+	}
+}
+
+func TestStoreCloseStopsBackgroundCleanup(t *testing.T) {
+	store := NewStore()
+	store.Close()
 }

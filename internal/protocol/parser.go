@@ -38,6 +38,14 @@ func parseSet(line, commandName string) Command {
 
 	keyFields := strings.Fields(rest)
 	key := keyFields[0]
+	if len(keyFields) >= 4 && strings.EqualFold(keyFields[len(keyFields)-2], "EX") {
+		value := strings.TrimSpace(strings.Join(keyFields[1:len(keyFields)-2], " "))
+		if value == "" {
+			return Command{Name: "SET", Args: []string{key}}
+		}
+		return Command{Name: "SET", Args: []string{key, value, "EX", keyFields[len(keyFields)-1]}}
+	}
+
 	value := strings.TrimSpace(rest[len(key):])
 	if value == "" {
 		return Command{

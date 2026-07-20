@@ -8,6 +8,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/stevenstank/bolt/internal/record"
 )
 
 // AOF stores write operations in an append-only log.
@@ -21,29 +24,29 @@ func NewAOF(path string) *AOF {
 }
 
 // AppendSet records a SET operation.
-func (a *AOF) AppendSet(key, value string) error {
+func (a *AOF) AppendSet(key, value string, expiresAt time.Time) error {
 	file, err := os.OpenFile(a.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
 
-	_, err = fmt.Fprint(file, formatSetRecord(key, value))
+	_, err = fmt.Fprint(file, formatSetRecord(key, value, expiresAt))
 	return err
 }
 
 // Load replays the append-only file and returns the resulting data.
-func (a *AOF) Load() (map[string]string, error) {
+func (a *AOF) Load() (map[string]record.Entry, error) {
 	file, err := os.OpenFile(a.path, os.O_RDWR, 0o644)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return map[string]string{}, nil
+			return map[string]record.Entry{}, nil
 		}
 		return nil, err
 	}
 	defer file.Close()
 
-	data := map[string]string{}
+	data := map[string]record.Entry{}
 	reader := bufio.NewReader(file)
 	var offset int64
 	for {
@@ -63,34 +66,60 @@ func (a *AOF) Load() (map[string]string, error) {
 
 		offset += int64(len(line))
 		line = strings.TrimSuffix(line, "\n")
-		key, value, err := parseSetRecord(line)
+		key, entry, err := parseSetRecord(line)
 		if err != nil {
 			return nil, err
 		}
-		data[key] = value
+		if entry.Expired(time.Now()) {
+			continue
+		}
+		data[key] = entry
 	}
 	return data, nil
 }
 
-func formatSetRecord(key, value string) string {
-	return fmt.Sprintf("SET\t%d:%s\t%d:%s\n", len(key), key, len(value), value)
+func formatSetRecord(key, value string, expiresAt time.Time) string {
+	if expiresAt.IsZero() {
+		return fmt.Sprintf("SET\t%d:%s\t%d:%s\n", len(key), key, len(value), value)
+	}
+
+	expiresAtText := strconv.FormatInt(expiresAt.UnixNano(), 10)
+	return fmt.Sprintf("SET\t%d:%s\t%d:%s\t%d:%s\n", len(key), key, len(expiresAtText), expiresAtText, len(value), value)
 }
 
-func parseSetRecord(line string) (string, string, error) {
+func parseSetRecord(line string) (string, record.Entry, error) {
 	parts := strings.Split(line, "\t")
-	if len(parts) != 3 || parts[0] != "SET" {
-		return "", "", fmt.Errorf("invalid AOF record: %q", line)
+	if parts[0] != "SET" || (len(parts) != 3 && len(parts) != 4) {
+		return "", record.Entry{}, fmt.Errorf("invalid AOF record: %q", line)
 	}
 
 	key, err := parseLengthPrefixedField(parts[1])
 	if err != nil {
-		return "", "", err
+		return "", record.Entry{}, err
 	}
-	value, err := parseLengthPrefixedField(parts[2])
+
+	var expiresAt time.Time
+	var valueField string
+	if len(parts) == 3 {
+		valueField = parts[2]
+	} else {
+		expiresAtText, err := parseLengthPrefixedField(parts[2])
+		if err != nil {
+			return "", record.Entry{}, err
+		}
+		expiresAtUnixNano, err := strconv.ParseInt(expiresAtText, 10, 64)
+		if err != nil {
+			return "", record.Entry{}, fmt.Errorf("invalid AOF expiry %q: %w", expiresAtText, err)
+		}
+		expiresAt = time.Unix(0, expiresAtUnixNano)
+		valueField = parts[3]
+	}
+
+	value, err := parseLengthPrefixedField(valueField)
 	if err != nil {
-		return "", "", err
+		return "", record.Entry{}, err
 	}
-	return key, value, nil
+	return key, record.Entry{Value: value, ExpiresAt: expiresAt}, nil
 }
 
 func parseLengthPrefixedField(field string) (string, error) {
